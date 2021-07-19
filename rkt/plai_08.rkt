@@ -21,7 +21,15 @@
 
 (define-type CFAE/L-Value
   [numV (n number?)]
-  [closureV (param symbol?) (body CFAE/L?) (env Env?)])
+  [closureV (param symbol?) (body CFAE/L?) (env Env?)]
+  [exprV (expr CFAE/L?) (env Env?) (cache boxed-boolean/CFAE/L-Value?)])
+
+(define (boxed-boolean/CFAE/L-Value? v)
+  (and (box? v)
+       (or (boolean? (unbox v))
+           (numV? (unbox v))
+           (closureV? (unbox v)))))
+
 
 (define-type Env
   [mtSub]
@@ -49,36 +57,48 @@
     [fwae-fun (param body) (fun param (preprocess body))]
     [fwae-app (fun-expr arg-expr) (app (preprocess fun-expr) (preprocess arg-expr))]))
 
-(define (interp expr ds)
-  (type-case FAE expr
+(define (interp expr env)
+  (type-case CFAE/L expr
     [num (n) (numV n)]
-    [add (l r) (num+ (interp l ds) (interp r ds))]
-    [sub (l r) (num- (interp l ds) (interp r ds))]
-    [id (v) (lookup v ds)]
-    [fun (bound-id bound-body) (closureV bound-id bound-body ds)]
+    [add (l r) (num+ (interp l env) (interp r env))]
+    [sub (l r) (num- (interp l env) (interp r env))]
+    [id (v) (lookup v env)]
+    [fun (bound-id bound-body) (closureV bound-id bound-body env)]
     [app (fun-expr arg-expr)
-         (local ([define fun-val (interp fun-expr ds)])
+         (local ([define fun-val (strict (interp fun-expr env))]
+                 [define arg-val (exprV arg-expr env (box false))])
            (interp (closureV-body fun-val)
                    (aSub (closureV-param fun-val)
-                         (interp arg-expr ds)
-                         (closureV-ds fun-val))))]))
+                         arg-val
+                         (closureV-env fun-val))))]))
 
 (define (run sexp)
-  (interp (preprocess (parse sexp)) (mtSub)))
+  (strict (interp (preprocess (parse sexp)) (mtSub))))
 
-(define (lookup name ds)
-  (type-case DefrdSub ds
+(define (num+ l r)
+  (numV (+ (numV-n (strict l)) (numV-n (strict r)))))
+
+(define (num- l r)
+  (numV (- (numV-n (strict l)) (numV-n (strict r)))))
+
+(define (strict e)
+  (type-case CFAE/L-Value e
+    [exprV (expr env cache)
+           (if (boolean? (unbox cache))
+               (local [(define the-value (strict (interp expr env)))]
+                 (begin
+                   (set-box! cache the-value)
+                   the-value))
+               (unbox cache))]
+    [else e]))
+
+(define (lookup name env)
+  (type-case Env env
     [mtSub () (error 'lookup "no binding for identifier")]
     [aSub (bound-name bound-value rest-ds)
           (if (symbol=? bound-name name)
               bound-value
               (lookup name rest-ds))]))
-
-(define (num+ l r)
-  (numV (+ (numV-n l) (numV-n r))))
-
-(define (num- l r)
-  (numV (- (numV-n l) (numV-n r))))
 
 (check-expect (parse '((fun (x) (+ x 4)) 5)) (fwae-app (fwae-fun 'x (fwae-add (fwae-id 'x) (fwae-num 4))) (fwae-num 5)))
 
