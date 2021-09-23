@@ -2,32 +2,44 @@
 
 (require test-engine/racket-tests)
 
-(define-type FWAE
+(define-type BCFWAE
   [fwae-num (n number?)]
-  [fwae-add (lhs FWAE?) (rhs FWAE?)]
-  [fwae-sub (lhs FWAE?) (rhs FWAE?)]
-  [fwae-with (name symbol?) (named-expression FWAE?) (body FWAE?)]
+  [fwae-add (lhs BCFWAE?) (rhs BCFWAE?)]
+  [fwae-sub (lhs BCFWAE?) (rhs BCFWAE?)]
+  [fwae-with (name symbol?) (named-expression BCFWAE?) (body BCFWAE?)]
   [fwae-id (name symbol?)]
-  [fwae-fun (param symbol?) (body FWAE?)]
-  [fwae-app (fun-expr FWAE?) (arg-expr FWAE?)]
-  [fwae-if0 (condition FWAE?) (expr0 FWAE?) (expr1 FWAE?)])
+  [fwae-fun (param symbol?) (body BCFWAE?)]
+  [fwae-app (fun-expr BCFWAE?) (arg-expr BCFWAE?)]
+  [fwae-if0 (condition BCFWAE?) (expr0 BCFWAE?) (expr1 BCFWAE?)]
+  [fwae-newbox (expr BCFWAE?)]
+  [fwae-setbox (expr BCFWAE?) (value BCFWAE?)]
+  [fwae-openbox (expr BCFWAE?)]
+  [fwae-seqn (expr BCFWAE?) (value BCFWAE?)])
 
-(define-type CFAE
+(define-type BCFAE
   [num (n number?)]
-  [add (lhs CFAE?) (rhs CFAE?)]
-  [sub (lhs CFAE?) (rhs CFAE?)]
+  [add (lhs BCFAE?) (rhs BCFAE?)]
+  [sub (lhs BCFAE?) (rhs BCFAE?)]
   [id (name symbol?)]
-  [fun (param symbol?) (body CFAE?)]
-  [app (fun-expr CFAE?) (arg-expr CFAE?)]
-  [if0 (condition CFAE?) (expr0 CFAE?) (expr1 CFAE?)])
+  [fun (param symbol?) (body BCFAE?)]
+  [app (fun-expr BCFAE?) (arg-expr BCFAE?)]
+  [if0 (condition BCFAE?) (expr0 BCFAE?) (expr1 BCFAE?)]
+  [newbox (expr BCFWAE?)]
+  [setbox (expr BCFWAE?) (value BCFWAE?)]
+  [openbox (expr BCFWAE?)]
+  [seqn (expr BCFWAE?) (value BCFWAE?)])
 
-(define-type CFAE-Value
+(define-type BCFAE-Value
   [numV (n number?)]
-  [closureV (param symbol?) (body CFAE?) (env Env?)])
+  [closureV (param symbol?) (body BCFAE?) (env Env?)])
 
 (define-type Env
   [mtSub]
-  [aSub (name symbol?) (value CFAE-Value?) (ds Env?)])
+  [aSub (name symbol?) (location number?) (env Env?)])
+
+(define-type Store
+  [mtSto]
+  [aSto (location number?) (value BCFAE-Value?) (store Store?)])
 
 (define (parse sexp)
   (cond [(number? sexp) (fwae-num sexp)]
@@ -39,11 +51,15 @@
            [(with) (fwae-with (first (second sexp)) (parse (second (second sexp))) (parse (third sexp)))]
            [(fun) (fwae-fun (first (second sexp)) (parse (third sexp)))]
            [(if0) (fwae-if0 (parse (second sexp)) (parse (third sexp)) (parse (fourth sexp)))]
+           [(newbox) (fwae-newbox (parse (second sexp)))]
+           [(setbox) (fwae-setbox (parse (second sexp)) (parse (third sexp)))]
+           [(openbox) (fwae-openbox (parse (second sexp)))]
+           [(seqn) (fwae-seqn (parse (second sexp)) (parse (third sexp)))]
            (else
             (fwae-app (parse (first sexp)) (parse (second sexp)))))]))
 
 (define (preprocess expr)
-  (type-case FWAE expr
+  (type-case BCFWAE expr
     [fwae-num (n) (num n)]
     [fwae-add (l r) (add (preprocess l) (preprocess r))]
     [fwae-sub (l r) (sub (preprocess l) (preprocess r))]
@@ -51,10 +67,14 @@
     [fwae-id (v) (id v)]
     [fwae-fun (param body) (fun param (preprocess body))]
     [fwae-app (fun-expr arg-expr) (app (preprocess fun-expr) (preprocess arg-expr))]
-    [fwae-if0 (condition expr0 expr1) (if0 (preprocess condition) (preprocess expr0) (preprocess expr1))]))
+    [fwae-if0 (condition expr0 expr1) (if0 (preprocess condition) (preprocess expr0) (preprocess expr1))]
+    [fwae-newbox (expr) (newbox expr)]
+    [fwae-setbox (expr value) (setbox expr value)]
+    [fwae-openbox (expr) (openbox expr)]
+    [fwae-seqn (expr value) (seqn expr value)]))
 
 (define (interp expr env)
-  (type-case CFAE expr
+  (type-case BCFAE expr
     [num (n) (numV n)]
     [add (l r) (num+ (interp l env) (interp r env))]
     [sub (l r) (num- (interp l env) (interp r env))]
@@ -69,7 +89,11 @@
     [if0 (condition expr0 expr1)
          (if (num-zero? (interp condition env))
              (interp expr0 env)
-             (interp expr1 env))]))
+             (interp expr1 env))]
+    [newbox (expr) (error 'interp "newbox not implemented")]
+    [setbox (expr value) (error 'interp "setbox not implemented")]
+    [openbox (expr) (error 'interp "openbox not implemented")]
+    [seqn (expr value) (error 'interp "seqn not implemented")]))
 
 (define (run sexp)
   (interp (preprocess (parse sexp)) (mtSub)))
@@ -98,6 +122,22 @@
  (fwae-with 'double (fwae-fun 'x (fwae-add (fwae-id 'x) (fwae-id 'x))) (fwae-add (fwae-app (fwae-id 'double) (fwae-num 10)) (fwae-app (fwae-id 'double) (fwae-num 5)))))
 
 (check-expect (parse '(fun (x) x)) (fwae-fun 'x (fwae-id 'x)))
+
+(check-expect
+ (parse '(newbox 0))
+ (fwae-newbox (fwae-num 0)))
+
+(check-expect
+ (parse '(setbox (newbox 0) 1))
+ (fwae-setbox (fwae-newbox (fwae-num 0)) (fwae-num 1)))
+
+(check-expect
+ (parse '(openbox (newbox 0)))
+ (fwae-openbox (fwae-newbox (fwae-num 0))))
+
+(check-expect
+ (parse '(with (x (newbox 0)) (seqn (setbox x 0) (openbox x))))
+ (fwae-with 'x (fwae-newbox (fwae-num 0)) (fwae-seqn (fwae-setbox (fwae-id 'x) (fwae-num 0)) (fwae-openbox (fwae-id 'x)))))
 
 (check-expect (run '(+ 3 4)) (numV 7))
 

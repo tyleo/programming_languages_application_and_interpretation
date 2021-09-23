@@ -25,14 +25,7 @@
 
 (define-type RCFAE-Value
   [numV (n number?)]
-  [closureV (param symbol?) (body RCFAE?) (env Env?)]
-  [exprV (expr RCFAE?) (env Env?) (cache boxed-boolean/RCFAE-Value?)])
-
-(define (boxed-boolean/RCFAE-Value? v)
-  (and (box? v)
-       (or (boolean? (unbox v))
-           (numV? (unbox v))
-           (closureV? (unbox v)))))
+  [closureV (param symbol?) (body RCFAE?) (env Env?)])
 
 (define (boxed-RCFAE-Value? v)
   (and (box? v) (RCFAE-Value? (unbox v))))
@@ -84,11 +77,10 @@
     [id (v) (lookup v env)]
     [fun (bound-id bound-body) (closureV bound-id bound-body env)]
     [app (fun-expr arg-expr)
-         (local ([define fun-val (strict (interp fun-expr env))]
-                 [define arg-val (exprV arg-expr env (box false))])
+         (local ([define fun-val (interp fun-expr env)])
            (interp (closureV-body fun-val)
                    (aSub (closureV-param fun-val)
-                         arg-val
+                         (interp arg-expr env)
                          (closureV-env fun-val))))]
     [if0 (condition expr0 expr1)
          (if (num-zero? (interp condition env))
@@ -97,27 +89,16 @@
     [rec (name named-expr body) (interp body (cyclically-bind-and-interp name named-expr env))]))
 
 (define (run sexp)
-  (strict (interp (preprocess (parse sexp)) (mtSub))))
+  (interp (preprocess (parse sexp)) (mtSub)))
 
 (define (num+ l r)
-  (numV (+ (numV-n (strict l)) (numV-n (strict r)))))
+  (numV (+ (numV-n l) (numV-n r))))
 
 (define (num- l r)
-  (numV (- (numV-n (strict l)) (numV-n (strict r)))))
+  (numV (- (numV-n l) (numV-n r))))
 
 (define (num-zero? number)
-  (eq? (numV-n (strict number)) 0))
-
-(define (strict e)
-  (type-case RCFAE-Value e
-    [exprV (expr env cache)
-           (if (boolean? (unbox cache))
-               (local [(define the-value (strict (interp expr env)))]
-                 (begin
-                   (set-box! cache the-value)
-                   the-value))
-               (unbox cache))]
-    [else e]))
+  (eq? (numV-n number) 0))
 
 (define (lookup name env)
   (type-case Env env
