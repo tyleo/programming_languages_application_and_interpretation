@@ -12,9 +12,9 @@
   [fwae-app (fun-expr BCFWAE?) (arg-expr BCFWAE?)]
   [fwae-if0 (condition BCFWAE?) (expr0 BCFWAE?) (expr1 BCFWAE?)]
   [fwae-newbox (expr BCFWAE?)]
-  [fwae-setbox (expr BCFWAE?) (value BCFWAE?)]
+  [fwae-setbox (expr BCFWAE?) (val BCFWAE?)]
   [fwae-openbox (expr BCFWAE?)]
-  [fwae-seqn (expr BCFWAE?) (value BCFWAE?)])
+  [fwae-seqn (expr BCFWAE?) (val BCFWAE?)])
 
 (define-type BCFAE
   [num (n number?)]
@@ -25,13 +25,14 @@
   [app (fun-expr BCFAE?) (arg-expr BCFAE?)]
   [if0 (condition BCFAE?) (expr0 BCFAE?) (expr1 BCFAE?)]
   [newbox (expr BCFWAE?)]
-  [setbox (expr BCFWAE?) (value BCFWAE?)]
+  [setbox (expr BCFWAE?) (val BCFWAE?)]
   [openbox (expr BCFWAE?)]
-  [seqn (expr BCFWAE?) (value BCFWAE?)])
+  [seqn (expr BCFWAE?) (val BCFWAE?)])
 
 (define-type BCFAE-Value
   [numV (n number?)]
-  [closureV (param symbol?) (body BCFAE?) (env Env?)])
+  [closureV (param symbol?) (body BCFAE?) (env Env?)]
+  [boxV (location number?)])
 
 (define-type Env
   [mtSub]
@@ -39,7 +40,10 @@
 
 (define-type Store
   [mtSto]
-  [aSto (location number?) (value BCFAE-Value?) (store Store?)])
+  [aSto (location number?) (val BCFAE-Value?) (store Store?)])
+
+(define-type ValuexStore
+  [vxs (val BCFAE-Value?) (store Store?)])
 
 (define (parse sexp)
   (cond [(number? sexp) (fwae-num sexp)]
@@ -69,34 +73,79 @@
     [fwae-app (fun-expr arg-expr) (app (preprocess fun-expr) (preprocess arg-expr))]
     [fwae-if0 (condition expr0 expr1) (if0 (preprocess condition) (preprocess expr0) (preprocess expr1))]
     [fwae-newbox (expr) (newbox expr)]
-    [fwae-setbox (expr value) (setbox expr value)]
+    [fwae-setbox (expr val) (setbox expr val)]
     [fwae-openbox (expr) (openbox expr)]
-    [fwae-seqn (expr value) (seqn expr value)]))
+    [fwae-seqn (expr val) (seqn expr val)]))
 
-(define (interp expr env)
+(define (interp expr env store)
   (type-case BCFAE expr
-    [num (n) (numV n)]
-    [add (l r) (num+ (interp l env) (interp r env))]
-    [sub (l r) (num- (interp l env) (interp r env))]
-    [id (v) (lookup v env)]
-    [fun (bound-id bound-body) (closureV bound-id bound-body env)]
+    
+    [num (n) (vxs (numV n) store)]
+    
+    [add (l-expr r-expr)
+         (type-case ValuexStore (interp l-expr env store)
+           [vxs (l-val l-store)
+                (type-case ValuexStore (interp r-expr env l-store)
+                  [vxs (r-val r-store)
+                       (vxs (num+ l-val r-val) r-store)])])]
+    
+    [sub (l-expr r-expr)
+         (type-case ValuexStore (interp l-expr env store)
+           [vxs (l-val l-store)
+                (type-case ValuexStore (interp r-expr env l-store)
+                  [vxs (r-val r-store)
+                       (vxs (num- l-val r-val) r-store)])])]
+    
+    [id (v) (vxs (lookup v env store) store)]
+    
+    [fun (bound-id bound-body) (vxs (closureV bound-id bound-body env) store)]
+    
     [app (fun-expr arg-expr)
-         (local ([define fun-val (interp fun-expr env)])
-           (interp (closureV-body fun-val)
-                   (aSub (closureV-param fun-val)
-                         (interp arg-expr env)
-                         (closureV-env fun-val))))]
-    [if0 (condition expr0 expr1)
-         (if (num-zero? (interp condition env))
-             (interp expr0 env)
-             (interp expr1 env))]
-    [newbox (expr) (error 'interp "newbox not implemented")]
-    [setbox (expr value) (error 'interp "setbox not implemented")]
-    [openbox (expr) (error 'interp "openbox not implemented")]
-    [seqn (expr value) (error 'interp "seqn not implemented")]))
+         (type-case ValuexStore (interp fun-expr env store)
+           [vxs (fun-val fun-store)
+                (type-case ValuexStore (interp arg-expr env fun-store)
+                  [vxs (arg-val arg-store)
+                       (local ([define new-loc (next-location arg-store)])
+                         (interp (closureV-body fun-val)
+                                 (aSub (closureV-param fun-val)
+                                       new-loc
+                                       (closureV-env fun-val))
+                                 (aSto new-loc arg-val arg-store)))])])]
+    
+    [if0 (condition-expr expr0 expr1)
+         (type-case ValuexStore (interp condition-expr env store)
+           [vxs (condition-val store-1)
+                (if (num-zero? condition-val)
+                    (interp expr0 env store-1)
+                    (interp expr1 env store-1))])]
+    
+    [newbox (expr)
+            (type-case ValuexStore (interp expr env store)
+              [vxs (expr-val expr-store)
+                   (local ([define new-loc (next-location expr-store)])
+                     (vxs (boxV new-loc)
+                          (aSto new-loc expr-val expr-store)))])]
+    
+    [setbox (expr val)
+            (type-case ValuexStore (interp expr env store)
+              [vxs (expr-val expr-store)
+                   (type-case ValuexStore (interp val env expr-store)
+                     [vxs (val-val val-store)
+                          (aSto (boxV-location expr-val) val-val val-store)])])]
+    
+    [openbox (expr)
+             (type-case ValuexStore (interp expr env store)
+               [vxs (expr-val expr-store)
+                    (vxs (store-lookup (boxV-location expr-val) expr-store)
+                         expr-store)])]
+    
+    [seqn (expr val)
+          (type-case ValuexStore (interp expr env store)
+            [vxs (expr-val expr-store)
+                 (interp val env expr-store)])]))
 
 (define (run sexp)
-  (interp (preprocess (parse sexp)) (mtSub)))
+  (vxs-val (interp (preprocess (parse sexp)) (mtSub) (mtSto))))
 
 (define (num+ l r)
   (numV (+ (numV-n l) (numV-n r))))
@@ -107,13 +156,29 @@
 (define (num-zero? number)
   (eq? (numV-n number) 0))
 
-(define (lookup name env)
+(define (env-lookup name env)
   (type-case Env env
-    [mtSub () (error 'lookup "no binding for identifier")]
-    [aSub (bound-name bound-value rest-ds)
+    [mtSub () (error 'env-lookup "no binding for identifier")]
+    [aSub (bound-name location rest-env)
           (if (symbol=? bound-name name)
-              bound-value
-              (lookup name rest-ds))]))
+              location
+              (env-lookup name rest-env))]))
+
+(define (store-lookup loc-index sto)
+  (type-case Store sto
+    [mtSto () (error 'store-lookup "no value at location")]
+    [aSto (location val rest-store)
+          (if (= location loc-index)
+              val
+              (store-lookup loc-index rest-store))]))
+
+(define next-location
+  (local ([define last-loc (box -1)])
+    (lambda (store)
+      (begin (set-box! last-loc (+ 1 (unbox last-loc)))
+             (unbox last-loc)))))
+
+(define (lookup name env store) (store-lookup (env-lookup name env) store))
 
 (check-expect (parse '((fun (x) (+ x 4)) 5)) (fwae-app (fwae-fun 'x (fwae-add (fwae-id 'x) (fwae-num 4))) (fwae-num 5)))
 
