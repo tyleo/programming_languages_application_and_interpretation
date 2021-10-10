@@ -24,10 +24,10 @@
   [fun (param symbol?) (body BCFAE?)]
   [app (fun-expr BCFAE?) (arg-expr BCFAE?)]
   [if0 (condition BCFAE?) (expr0 BCFAE?) (expr1 BCFAE?)]
-  [newbox (expr BCFWAE?)]
-  [setbox (expr BCFWAE?) (val BCFWAE?)]
-  [openbox (expr BCFWAE?)]
-  [seqn (expr BCFWAE?) (val BCFWAE?)])
+  [newbox (expr BCFAE?)]
+  [setbox (expr BCFAE?) (val BCFAE?)]
+  [openbox (expr BCFAE?)]
+  [seqn (expr BCFAE?) (val BCFAE?)])
 
 (define-type BCFAE-Value
   [numV (n number?)]
@@ -72,10 +72,10 @@
     [fwae-fun (param body) (fun param (preprocess body))]
     [fwae-app (fun-expr arg-expr) (app (preprocess fun-expr) (preprocess arg-expr))]
     [fwae-if0 (condition expr0 expr1) (if0 (preprocess condition) (preprocess expr0) (preprocess expr1))]
-    [fwae-newbox (expr) (newbox expr)]
-    [fwae-setbox (expr val) (setbox expr val)]
-    [fwae-openbox (expr) (openbox expr)]
-    [fwae-seqn (expr val) (seqn expr val)]))
+    [fwae-newbox (expr) (newbox (preprocess expr))]
+    [fwae-setbox (expr val) (setbox (preprocess expr) (preprocess val))]
+    [fwae-openbox (expr) (openbox (preprocess expr))]
+    [fwae-seqn (expr val) (seqn (preprocess expr) (preprocess val))]))
 
 (define (interp expr env store)
   (type-case BCFAE expr
@@ -131,7 +131,7 @@
               [vxs (expr-val expr-store)
                    (type-case ValuexStore (interp val env expr-store)
                      [vxs (val-val val-store)
-                          (aSto (boxV-location expr-val) val-val val-store)])])]
+                          (vxs val-val (aSto (boxV-location expr-val) val-val val-store))])])]
     
     [openbox (expr)
              (type-case ValuexStore (interp expr env store)
@@ -236,5 +236,49 @@
 
 (check-expect (run '(if0 0 1 2)) (numV 1))
 (check-expect (run '(if0 1 1 2)) (numV 2))
+
+(check-expect (run
+               '(with (switch0 (newbox 0))
+                      (with (switch1 (newbox 1))
+                            switch0))) (boxV 20))
+
+(check-expect (run
+               '(with (switch0 (newbox 0))
+                      (with (switch1 (newbox 1))
+                            switch1))) (boxV 26))
+
+(check-expect (run
+               '(with (test (newbox 0))
+                      (seqn
+                       (setbox test 1)
+                       (openbox test))))
+              (numV 1))
+
+(check-expect (run
+               '(with (switch0 (newbox 0))
+                      (with (switch1 (newbox 1))
+                            (openbox switch0)))) (numV 0))
+
+(check-expect (run
+               '(with (switch (newbox 0))
+                      (with (toggle (fun (dum)
+                                         (if0 (openbox switch)
+                                              (seqn
+                                               (setbox switch 1)
+                                               1)
+                                              (seqn (setbox switch 0) 0))))
+                            (openbox switch)))) (numV 0))
+
+(check-expect (run
+               '(with (switch (newbox 0))
+                      (with (toggle (fun (dum)
+                                         (if0 (openbox switch)
+                                              (seqn
+                                               (setbox switch 1)
+                                               1)
+                                              (seqn
+                                               (setbox switch 0)
+                                               0))))
+                            (toggle 0)))) (numV 1))
 
 (test)
